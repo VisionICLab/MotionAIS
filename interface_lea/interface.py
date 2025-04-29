@@ -10,7 +10,7 @@ from kivy.lang import Builder
 from kivy.core.window import Window
 from kivy.graphics import Color, Line, Ellipse
 from kivy.uix.label import Label
-from kivy.garden.matplotlib.backend_kivyagg import FigureCanvasKivyAgg
+from kivy.garden.matplotlib.backend_kivyagg import FigureCanvasKivyAgg 
 
 import json
 import cv2
@@ -18,9 +18,9 @@ import csv
 import math
 import time
 import copy
-import open3d as o3d
+#cimport open3d as o3d
 import numpy as np
-from tensorflow import linalg
+# from tensorflow import linalg
 import matplotlib.pyplot as plt
 from matplotlib import colormaps as cm
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
@@ -31,7 +31,7 @@ from scipy.ndimage import gaussian_filter1d, median_filter
 
 
 import read_raw_file as RRF
-import marker_detection
+import marker_detection_with_particles
 
 
 class MyApp(Widget):
@@ -99,7 +99,7 @@ class MyApp(Widget):
             # crée les images Preprocessed pour consultation
             if len(os.listdir(save_path_im)) == 0:
                 for filename_i, filename_xyz in zip(os.listdir(save_path), os.listdir(save_path_xyz)):
-                    frame_display, preprocessed_frame = marker_detection.preprocess(cv2.imread(os.path.join(save_path, filename_i)), self.remove_bg(np.load(os.path.join(save_path_xyz, filename_xyz))), w1, w2, h1, h2)
+                    frame_display, preprocessed_frame = marker_detection_with_particles.preprocess(cv2.imread(os.path.join(save_path, filename_i)), self.remove_bg(np.load(os.path.join(save_path_xyz, filename_xyz))), w1, w2, h1, h2)
                     cv2.imwrite(os.path.join(save_path_im, filename_i), preprocessed_frame)
 
             # Trouve le nombre d'images, définit le max du slider et le texte /tot
@@ -174,11 +174,11 @@ class MyApp(Widget):
             h1 = int(body_HL[0])+100
         else:
             print('other')
-            w1 = np.max(left-80, 0)
-            w2 = right+80
-            h1 = int(body_HL[0])+50
+            w1 = np.max(left-50, 0)
+            w2 = right+50
+            h1 = int(body_HL[0])-100
 
-        h2 = h1+int(6/5*(w2-w1))
+        h2 = h1+int(6/5*(w2-w1))+100
         print(w1, w2, h1, h2)
 
         self.ids.width.text = f'({w2-w1}, 0)'
@@ -305,17 +305,13 @@ class MyApp(Widget):
             os.makedirs(path+'/annotated_frames/', exist_ok=True)
             # Détecte les marqueurs, crée images annotées et fichiers txt avec positions
             if len(os.listdir(path+'/annotated_frames/')) == 0: #or self.ids.check_new.state == 'down':
-                marker_detection.annotate_frames(path)
+                all_key_points = marker_detection_with_particles.annotate_frames_with_particles(path)
         
         global dict_coordo
         dict_coordo = {}
-        i = 1
-        for filename in os.listdir(path+'/Preprocessed/'):
-            key_points = marker_detection.detect_markers(cv2.imread(os.path.join(path+'/Preprocessed/', filename)))
-            points = [key_points[j] for j in range(len(key_points))]
+        for i,frame_key_points in enumerate(all_key_points):
             #marker_array[0][i] = [[point.pt[0], point.pt[1]] for point in points]
-            dict_coordo.update({f'image{i}' : [[float(point.pt[0]), float(point.pt[1])] for point in points]})
-            i += 1
+            dict_coordo.update({f'image{i+1}' : [[float(point.pt[0]), float(point.pt[1])] for point in frame_key_points]})
             
         detection_eff = True
 
@@ -501,11 +497,21 @@ class MyApp(Widget):
                 if c not in dict_coordo_labels_manual[im].values():
                     dict_coordo[im].remove(c)
         self.show_image()
+    
+    def validate_labels(self):
+        for im in dict_coordo.keys():
+            if im not in dict_coordo_labels_manual:
+                dict_coordo_labels_manual[im] = {}
+        
+            for label in labels:  # Vérifie tous les labels attendus
+                if label not in dict_coordo_labels_manual[im]:
+                    dict_coordo_labels_manual[im][label] = [np.nan, np.nan]
 
     # Ajoute des marqueurs manquants selon les splines d'interpolation
     def add_by_continuity(self):
         im_prob_nb = self.verif_nb()
         splines_smooth = self.interpolate_spline()
+        self.validate_labels()
         for im in im_prob_nb:
             for l in labels:
                 c = dict_coordo_labels_manual[f'image{im}'][l]
@@ -791,7 +797,9 @@ class MyApp(Widget):
             if self.ids.button_analyze.state == 'down':
                 self.coordo_xyz_marqueurs()
 
-                dict_metriques = {'angle_scap_vert' : [], 'angle_scap_prof': [], 'diff_dg': []}
+                dict_metriques = {'angle_scap_vert' : [], 'angle_scap_prof': [], 'diff_dg': []
+                                #   , 'bsr': []
+                                }
 
                 for im, coordo in dict_coordo_xyz_labels_r.items():
                     scap_y = np.degrees(np.arctan((coordo['ScD'][1] - coordo['ScG'][1])/(coordo['ScD'][0] - coordo['ScG'][0])))
