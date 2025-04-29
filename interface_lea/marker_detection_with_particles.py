@@ -6,13 +6,13 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from scipy.ndimage import maximum_filter
 from particle_filter import ParticleFilter
-from Unet_blob_detector.model import UnetModel
+import scipy.ndimage as nd
 import torch
 
 #fonction pour tester juste un seul point 
 model = "Blob" # "Blob"
 
-def annotate_single_frame_with_particles(preprocessed_frame, particle_filters, cur_key_points ,model, observation_history,frame_idx,  distance_threshold=30):
+def annotate_single_frame_with_particles(preprocessed_frame, particle_filters, cur_key_points ,model, observation_history,frame_idx,  previous_frame,distance_threshold=30):
     """
     Annoter un cadre avec des particules pour plusieurs marqueurs.
     """
@@ -43,7 +43,7 @@ def annotate_single_frame_with_particles(preprocessed_frame, particle_filters, c
 
         # Mise à jour du filtre de particules
         particle_filter.predict_with_lagrange_safe(observation_history[i],frame_idx)
-        particle_filter.update_weights(observation, preprocessed_frame)
+        particle_filter.update_weights(observation, preprocessed_frame, previous_frame)
         particle_filter.resample()
         estimated_position = particle_filter.estimate()
 
@@ -106,9 +106,9 @@ def annotate_frames_with_particles(path, num_particles=5000, distance_threshold=
         else:
             # Mise à jour des positions basées sur le filtre de particules
             cur_key_points, frame_with_key_points, observation_history = annotate_single_frame_with_particles(
-                preprocessed_frame, particle_filters, cur_key_points, model, observation_history, i, distance_threshold=distance_threshold
+                preprocessed_frame, particle_filters, cur_key_points, model, observation_history, i, previous_frame,distance_threshold=distance_threshold
             )
-
+        previous_frame = preprocessed_frame.copy()
         if frame_with_key_points is None:
             print(f"No frame with key points generated for {filename}. Skipping save.")
             continue

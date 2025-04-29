@@ -23,6 +23,8 @@ import numpy as np
 # from tensorflow import linalg
 import matplotlib.pyplot as plt
 from matplotlib import colormaps as cm
+from Unet_blob_detector.model import UnetModel
+import torch
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from matplotlib.colors import ListedColormap
 from scipy.interpolate import splev, splrep
@@ -299,14 +301,16 @@ class MyApp(Widget):
     # Fonction pour détecter les marqueurs de toutes les images du répertoire
     def detect_marqueurs(self):
         timer_debut_detection = time.process_time_ns()
+        weights = "./Unet_blob_detector/blobdetector3.ckpt"
+        unet_model = UnetModel("FPN", "resnet34", in_channels=3, out_classes=1)
+        unet_model.load_state_dict(torch.load(weights,weights_only = True))
         global detection_eff
-        
         if len(path) > 1:
             os.makedirs(path+'/annotated_frames/', exist_ok=True)
             # Détecte les marqueurs, crée images annotées et fichiers txt avec positions
             if len(os.listdir(path+'/annotated_frames/')) == 0: #or self.ids.check_new.state == 'down':
-                all_key_points = marker_detection_with_particles.annotate_frames_with_particles(path)
-        
+                all_key_points = marker_detection_with_particles.annotate_frames_with_particles(path,model = unet_model)
+                
         global dict_coordo
         dict_coordo = {}
         for i,frame_key_points in enumerate(all_key_points):
