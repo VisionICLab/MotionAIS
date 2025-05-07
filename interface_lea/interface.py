@@ -10,7 +10,7 @@ from kivy.lang import Builder
 from kivy.core.window import Window
 from kivy.graphics import Color, Line, Ellipse
 from kivy.uix.label import Label
-from kivy.garden.matplotlib.backend_kivyagg import FigureCanvasKivyAgg 
+from kivy_garden.matplotlib.backend_kivyagg import FigureCanvasKivyAgg 
 
 import json
 import cv2
@@ -18,7 +18,7 @@ import csv
 import math
 import time
 import copy
-#cimport open3d as o3d
+import open3d as o3d
 import numpy as np
 # from tensorflow import linalg
 import matplotlib.pyplot as plt
@@ -29,7 +29,7 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from matplotlib.colors import ListedColormap
 from scipy.interpolate import splev, splrep
 from scipy.ndimage import gaussian_filter1d, median_filter
-#from open3d.pipelines.registration import registration_icp, TransformationEstimationPointToPoint
+from open3d.pipelines.registration import registration_icp, TransformationEstimationPointToPoint
 
 
 import read_raw_file as RRF
@@ -180,7 +180,7 @@ class MyApp(Widget):
             w2 = right+50
             h1 = int(body_HL[0])-100
 
-        h2 = h1+int(6/5*(w2-w1))+100
+        h2 = h1+int(6/5*(w2-w1))+150
         print(w1, w2, h1, h2)
 
         self.ids.width.text = f'({w2-w1}, 0)'
@@ -313,9 +313,20 @@ class MyApp(Widget):
                 
         global dict_coordo
         dict_coordo = {}
-        for i,frame_key_points in enumerate(all_key_points):
-            #marker_array[0][i] = [[point.pt[0], point.pt[1]] for point in points]
-            dict_coordo.update({f'image{i+1}' : [[float(point.pt[0]), float(point.pt[1])] for point in frame_key_points]})
+        if len(os.listdir(path+'/annotated_frames/')) == 0:
+            for i,frame_key_points in enumerate(all_key_points):
+                #marker_array[0][i] = [[point.pt[0], point.pt[1]] for point in points]
+                dict_coordo.update({f'image{i+1}' : [[float(point.pt[0]), float(point.pt[1])] for point in frame_key_points]})
+        else:
+            for i,file in enumerate(sorted(os.listdir(path + "/landmarks/"))):
+                print(file)
+                with open(path + "/landmarks/" + file,"r") as f:
+                    points = []
+                    for point in f:
+                        point = [float(pt) for pt in point[:-1].split(" ")]
+                        points.append(point)
+                dict_coordo.update({f'image{i+1}' : points})
+
             
         detection_eff = True
 
@@ -1309,7 +1320,7 @@ class MyApp(Widget):
             if not 'landmarks' in os.listdir(path):
                 os.mkdir(path+'/landmarks', )
             if not 'Positions' in os.listdir(path):
-                os.mkdir(path+'\\Positions', )
+                os.mkdir(path+'/Positions', )
             self.save_positions()
             
         if analyse_eff == True:
