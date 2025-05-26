@@ -29,11 +29,11 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from matplotlib.colors import ListedColormap
 from scipy.interpolate import splev, splrep
 from scipy.ndimage import gaussian_filter1d, median_filter
-from open3d.pipelines.registration import registration_icp, TransformationEstimationPointToPoint
 
 
 import read_raw_file as RRF
 import marker_detection_with_particles
+import marker_detection_with_unet
 
 
 class MyApp(Widget):
@@ -301,16 +301,13 @@ class MyApp(Widget):
     # Fonction pour détecter les marqueurs de toutes les images du répertoire
     def detect_marqueurs(self):
         timer_debut_detection = time.process_time_ns()
-        weights = "./Unet_blob_detector/blobdetector3.ckpt"
-        unet_model = UnetModel("FPN", "resnet34", in_channels=3, out_classes=1)
-        unet_model.load_state_dict(torch.load(weights,weights_only = True))
+
         global detection_eff
         if len(path) > 1:
             os.makedirs(path+'/annotated_frames/', exist_ok=True)
             # Détecte les marqueurs, crée images annotées et fichiers txt avec positions
             if len(os.listdir(path+'/annotated_frames/')) == 0: #or self.ids.check_new.state == 'down':
-                all_key_points = marker_detection_with_particles.annotate_frames_with_particles(path,model = unet_model)
-                
+                all_key_points = marker_detection_with_unet.annotate_frames(path, save_seg = False)
         global dict_coordo
         dict_coordo = {}
         if len(os.listdir(path+'/annotated_frames/')) == 0:
@@ -504,7 +501,17 @@ class MyApp(Widget):
         if labelize_extent == True:
             self.extend_labelisation()
         self.show_image()
-    
+    # Modifie les annotations en utilisant un filtre a particules
+    def apply_particle_filter(self):
+        
+        all_key_points = marker_detection_with_particles.annotate_frames_with_particles(path,num_particles=500,use_current_estim=True)
+        
+        for i,frame_key_points in enumerate(all_key_points):
+                #marker_array[0][i] = [[point.pt[0], point.pt[1]] for point in points]
+                dict_coordo.update({f'image{i+1}' : [[float(point.pt[0]), float(point.pt[1])] for point in frame_key_points]})
+                
+        self.ids.label_ready.text = "Particle filter tracking complete."
+        
     # Supprime les marqueurs qui n'ont pas été identifiés dans la prolongation de la labellisation manuelle
     def delete_by_continuity(self):
         for im in dict_coordo.keys():
@@ -1123,105 +1130,6 @@ class MyApp(Widget):
     def erase_distances(self):
         self.remove_widget(self.Distances)
         self.canvas.remove_group(u"circle_gold")
-
-
-# ICP registration to align and show manual corrections markers's positions on actual image
-    """ def ICP_registration(self, source, target):
-        pc_target = o3d.geometry.PointCloud()
-        pc_target.points = o3d.utility.Vector3dVector(target)
-        pc_source = o3d.geometry.PointCloud()
-        pc_source.points = o3d.utility.Vector3dVector(source)
-
-        trans_init = np.eye(4)
-        reg_p2p = registration_icp(pc_source, pc_target, 400, trans_init, TransformationEstimationPointToPoint())
-        pc_source_t = pc_source.transform(reg_p2p.transformation)
-        source_trans = np.asarray(pc_source_t.points)
-
-        RMSE = reg_p2p.inlier_rmse
-
-        return source_trans, RMSE
-
-    def correction_gold(self):
-        path_pt = path[:(path.find('Participant')+14)]
-        correction_paths = ['Corrected/Prise01/Positions/positions_xyzr.json', 'Corrected/Prise02/Positions/positions_xyzr.json',
-                            'Maximum/Prise01/Positions/positions_xyzr.json', 'Maximum/Prise02/Positions/positions_xyzr.json',
-                            'Minimum/Prise01/Positions/positions_xyzr.json', 'Minimum/Prise02/Positions/positions_xyzr.json']
-
-        global arrays_corr
-        arrays_corr = {}
-
-        for key in dict_coordo_xyz_labels_r:
-            arrays_corr.update({key : {}})
-            for correction_path in correction_paths:
-                try:
-                    file_corr = open(os.path.join(path_pt, correction_path))
-                    dict_corr = json.load(file_corr)
-                    array_corr = np.asarray([[c_corr[0], c_corr[1], c_corr[2]] for c_corr in list(dict_corr.values())[len(dict_corr.values())//2].values()]) # sélection du frame central de la séquence
-                    array_auto = np.asarray([[c_corr[0], c_corr[1], c_corr[2]] for c_corr in list(dict_coordo_xyz_labels_r[key].values())]) # sélection du frame central de la séquence
-                    
-                    a = sorted(array_auto, key=lambda tup: tup[0])[0]
-                    b = sorted(array_corr, key=lambda tup: tup[0])[0]
-                    dist = np.subtract(a, b)
-                    array_corr = array_corr + dist
-
-                    array_corr_t, RMSE = self.ICP_registration(array_corr, array_auto)
-
-                    pelvis_auto = sorted(array_auto, key=lambda el: el[1])[:2]
-                    pelvis_corr_t = sorted(array_corr_t, key=lambda el: el[1])[:2]
-
-                    IG_auto = sorted(pelvis_auto, key=lambda el: el[0])[0]
-                    ID_auto = sorted(pelvis_auto, key=lambda el: el[0])[1]
-                    IG_corr = sorted(pelvis_corr_t, key=lambda el: el[0])[0]
-                    ID_corr = sorted(pelvis_corr_t, key=lambda el: el[0])[1]
-                    dist = (np.subtract(IG_auto, IG_corr) + np.subtract(ID_auto, ID_corr)) /2.0
-                    array_corr_t = array_corr_t + dist
-
-                    i = correction_path.find('/')
-                    arrays_corr[key].update({f'{correction_path[:i]} {correction_path[i+7:i+8]}': [array_corr_t, RMSE]})
-
-                except FileNotFoundError:
-                    continue
-        
-    # Affiche les positions souhaitées des marqueurs selon un type de correction manuelle (Droite, Minimale, Maximale)
-    def show_correction_gold(self):
-        try:
-            array_corr_t = arrays_corr[f'image{image_nb}']
-        except NameError:
-            self.correction_gold()
-            array_corr_t = arrays_corr[f'image{image_nb}']
-
-        if self.ids.button_correction.state == 'down':
-            correction_paths = []
-            if self.ids.check_corrected.state == 'down':
-                correction_paths += ['Corrected/Prise01/Positions/positions_xyzr.json', 'Corrected/Prise02/Positions/positions_xyzr.json']
-            if self.ids.check_max.state == 'down':
-                correction_paths += ['Maximum/Prise01/Positions/positions_xyzr.json', 'Maximum/Prise02/Positions/positions_xyzr.json']
-            if self.ids.check_min.state == 'down':
-                correction_paths += ['Minimum/Prise01/Positions/positions_xyzr.json', 'Minimum/Prise02/Positions/positions_xyzr.json']
-
-            for correction_path in correction_paths:
-                i = correction_path.find('/')
-                type_corr = f'{correction_path[:i]} {correction_path[i+7:i+8]}'
-                plt.scatter(array_corr_t[type_corr][0][:,0], array_corr_t[type_corr][0][:,1], label = f'{type_corr} : RMSE = {array_corr_t[type_corr][1]:.4f}')
-                    
-            array_auto = np.asarray([[c_corr[0], c_corr[1], c_corr[2]] for c_corr in list(dict_coordo_xyz_labels_r[f'image{image_nb}'].values())]) # sélection du frame central de la séquence
-            
-            plt.scatter(array_auto[:,0], array_auto[:,1], label='Autocorrection')
-            plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
-            plt.title('Positions actuelles et visées des marqueurs')
-            plt.xlabel('Coordonnée en x')
-            plt.ylabel('Coordonnée en y')
-            plt.gca().set_aspect("equal")
-            plt.tight_layout()
-            self.ids.graph.size_hint = (.4, .73)
-            self.ids.graph.pos_hint = {'x':.53, 'top':.73}
-            self.ids.graph.add_widget(FigureCanvasKivyAgg(plt.gcf()))
-            plt.close()
-
-        else:
-            self.ids.graph.clear_widgets()
-            self.ids.graph.size_hint = (.47, .6)
-            self.ids.graph.pos_hint = {'x':.53, 'top':.6}  """
     
     def rotate_markers(self):
         dict_coordo_xyz_rotated = {}
