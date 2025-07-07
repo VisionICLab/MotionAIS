@@ -12,16 +12,10 @@ import torch
 #fonction pour tester juste un seul point 
 model = "Blob" # "Blob"
 
-def annotate_single_frame_with_particles(preprocessed_frame, particle_filters, cur_key_points ,model, observation_history,frame_idx,  previous_frame,distance_threshold=30):
+def annotate_single_frame_with_particles(preprocessed_frame, particle_filters, key_points, observation_history,frame_idx,  previous_frame,distance_threshold=30):
     """
     Annoter un cadre avec des particules pour plusieurs marqueurs.
     """
-
-    # Détection des marqueurs
-    key_points = detect_markers(preprocessed_frame,used_model="Unet",model=model)
-    if not key_points:
-        print("No markers detected.")
-        return cur_key_points, preprocessed_frame
 
     # Assurez-vous que key_points est une liste
     key_points = list(key_points)
@@ -66,7 +60,7 @@ def annotate_single_frame_with_particles(preprocessed_frame, particle_filters, c
 
 
 
-def annotate_frames_with_particles(path, num_particles=5000, distance_threshold=30, model=None):
+def annotate_frames_with_particles(path, num_particles=5000, distance_threshold=30, model=None, use_current_estim=False):
     """
     Annoter une séquence d'images avec les filtres de particules pour plusieurs marqueurs.
     
@@ -86,27 +80,37 @@ def annotate_frames_with_particles(path, num_particles=5000, distance_threshold=
     cur_key_points = []
     frame_with_key_points = None  # Initialisation par défaut
 
-    for i, filename in enumerate(sorted(os.listdir(images_path))):
+    for i, filename in tqdm(enumerate(sorted(os.listdir(images_path))),total = len(os.listdir(images_path))):
         preprocessed_frame = cv2.imread(os.path.join(images_path, filename), cv2.IMREAD_GRAYSCALE)
 
         if preprocessed_frame is None:
             print(f"Failed to load image {filename}. Skipping.")
             continue
-
+        
+        
+            # Détection des marqueurs
+        if use_current_estim:
+            landmark_file = os.path.join(landmark_path, f"landmarks_{i:04d}.txt")
+            with open(landmark_file, 'r') as f:
+                points = [list(map(float, line.strip().split())) for line in f]
+            key_points = [cv2.KeyPoint(x=p[0], y=p[1], size=10) for p in points]
+        else:
+            key_points = detect_markers(preprocessed_frame,used_model="Unet",model=model)
+        
         if i == 0:
             # Initialisation des filtres de particules avec les marqueurs détectés dans la première image
-            initial_key_points = detect_markers(preprocessed_frame,used_model="Unet",model=model)
-            if not initial_key_points:
+            key_points
+            if not key_points:
                 print("No markers detected in the first frame. Exiting.")
                 return
-            particle_filters = [ParticleFilter(num_particles, np.array(kp.pt), preprocessed_frame.shape) for kp in initial_key_points]
-            cur_key_points = initial_key_points
+            particle_filters = [ParticleFilter(num_particles, np.array(kp.pt), preprocessed_frame.shape) for kp in key_points]
+            cur_key_points = key_points
             observation_history = [[[kp.pt[0],kp.pt[1]]] for kp in cur_key_points]
             frame_with_key_points = cv2.drawKeypoints(preprocessed_frame, cur_key_points, None, color=(0, 0, 255))
         else:
             # Mise à jour des positions basées sur le filtre de particules
             cur_key_points, frame_with_key_points, observation_history = annotate_single_frame_with_particles(
-                preprocessed_frame, particle_filters, cur_key_points, model, observation_history, i, previous_frame,distance_threshold=distance_threshold
+                preprocessed_frame, particle_filters ,key_points , observation_history, i, previous_frame,distance_threshold=distance_threshold
             )
         previous_frame = preprocessed_frame.copy()
         if frame_with_key_points is None:
