@@ -99,10 +99,14 @@ class MyApp(Widget):
             self.automatic_crop()
 
             # crée les images Preprocessed pour consultation
+            global im_dim
             if len(os.listdir(save_path_im)) == 0:
                 for filename_i, filename_xyz in zip(os.listdir(save_path), os.listdir(save_path_xyz)):
                     frame_display, preprocessed_frame = marker_detection_with_particles.preprocess(cv2.imread(os.path.join(save_path, filename_i)), self.remove_bg(np.load(os.path.join(save_path_xyz, filename_xyz))), w1, w2, h1, h2)
                     cv2.imwrite(os.path.join(save_path_im, filename_i), preprocessed_frame)
+                im_dim = preprocessed_frame.shape
+            else:
+                im_dim = cv2.imread(os.path.join(save_path_im, os.listdir(save_path_im)[0])).shape
 
             # Trouve le nombre d'images, définit le max du slider et le texte /tot
             global images_total
@@ -114,6 +118,8 @@ class MyApp(Widget):
             # Initie les variables pour dictionnaire de coordonnées et flag analyse_eff (pour affichage x,y,z)
             global dict_coordo
             dict_coordo = {}
+            for image_id in range(len(os.listdir(save_path_im))):
+                dict_coordo[f"image{image_id}"] = []
             global dict_coordo_labels_manual
             dict_coordo_labels_manual = {}
 
@@ -121,7 +127,7 @@ class MyApp(Widget):
             nb_marqueurs = np.nan
             
             # Lance la détection des marqueurs et affiche la 1re image
-            self.detect_marqueurs()
+            # self.detect_marqueurs()
             self.show_image()
 
             timer_fin_im = time.process_time_ns()
@@ -224,9 +230,9 @@ class MyApp(Widget):
         self.ids.image_show.clear_widgets()
 
         if self.ids.button_profondeur.state == 'normal':
-            self.ids.image_show.source = os.path.join(save_path_im, os.listdir(save_path_im)[image_nb-1])
+            self.ids.image_show.source = os.path.join(save_path_im, sorted(os.listdir(save_path_im))[image_nb-1])
         if self.ids.button_profondeur.state == 'down':
-            self.ids.image_show.source = os.path.join(save_path_depth, os.listdir(save_path_depth)[image_nb-1])
+            self.ids.image_show.source = os.path.join(save_path_depth, sorted(os.listdir(save_path_depth))[image_nb-1])
 
         self.canvas.remove_group(u"circle") # efface les cercles verts des marqueurs
         self.ids.rep_continuity.text = ''
@@ -326,9 +332,6 @@ class MyApp(Widget):
 
             
         detection_eff = True
-
-        global im_dim
-        im_dim = cv2.imread(os.path.join(save_path_im, os.listdir(save_path_im)[0])).shape
 
         # Va chercher les positions corrigées enregistrées si mode Ouvrir
         if self.ids.check_open.state == 'down':
@@ -500,6 +503,10 @@ class MyApp(Widget):
 
         if labelize_extent == True:
             self.extend_labelisation()
+
+        print(dict_coordo[f"image{image_nb}"])
+        global detection_eff
+        detection_eff = True
         self.show_image()
     # Modifie les annotations en utilisant un filtre a particules
     def apply_particle_filter(self):
