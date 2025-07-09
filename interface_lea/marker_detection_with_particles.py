@@ -3,14 +3,12 @@ import numpy as np
 import os
 import sys
 from tqdm import tqdm
-import matplotlib.pyplot as plt
 from scipy.ndimage import maximum_filter
 from particle_filter import ParticleFilter
-import scipy.ndimage as nd
-import torch
+from segmentation_utils import load_model,apply_seg_model
+import json
 
 #fonction pour tester juste un seul point 
-model = "Blob" # "Blob"
 
 def annotate_single_frame_with_particles(preprocessed_frame, particle_filters, key_points, observation_history,frame_idx,  previous_frame,distance_threshold=30):
     """
@@ -21,23 +19,22 @@ def annotate_single_frame_with_particles(preprocessed_frame, particle_filters, k
     key_points = list(key_points)
 
     updated_keypoints = []
-    frame_with_key_points = preprocessed_frame.copy()
 
     for i, particle_filter in enumerate(particle_filters):
         estim = particle_filter.estimate()
         distances = np.array([np.linalg.norm(np.array(kp.pt) - estim) for kp in key_points])
-        if len(distances) > 0 and np.min(distances) < distance_threshold:
+        model_detection = len(distances) > 0 and np.min(distances) < 30
+        if model_detection:
             # Associer le keypoint le plus proche
             min_index = np.argmin(distances)
-            observation = np.array(key_points[min_index].pt)
-            key_points.pop(min_index)  # Supprimer le keypoint associé de la liste
+            observation = np.array((key_points[min_index].pt[0],key_points[min_index].pt[1]))
         else:
             # Pas de point détecté dans le seuil, garder l'estimation précédente
             observation = particle_filter.estimate()
-
+            
         # Mise à jour du filtre de particules
-        particle_filter.predict_with_lagrange_safe(observation_history[i],frame_idx)
-        particle_filter.update_weights(observation, preprocessed_frame, previous_frame)
+        particle_filter.predict(observation_history[i],frame_idx)
+        particle_filter.update_weights(observation, preprocessed_frame, previous_frame, observation_history[i][-1],model_detection)
         particle_filter.resample()
         estimated_position = particle_filter.estimate()
 
@@ -47,20 +44,17 @@ def annotate_single_frame_with_particles(preprocessed_frame, particle_filters, k
         updated_keypoints.append(kp)
         observation_history[i].append([kp.pt[0],kp.pt[1]])
 
-    # Ajouter de nouveaux filtres de particules pour les marqueurs non associés
-    for key_point in key_points:
-        new_filter = ParticleFilter(num_particles=900, initial_position=np.array(key_point.pt), img_shape=preprocessed_frame.shape)
-        particle_filters.append(new_filter)
-        updated_keypoints.append(key_point)
-        observation_history.append([[key_point.pt[0],key_point.pt[1]]])
-
-    # Annoter les positions estimées sur l'image
-    frame_with_key_points = cv2.drawKeypoints(preprocessed_frame, updated_keypoints,None,color=(0, 0, 255),flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-    return updated_keypoints, frame_with_key_points, observation_history
+    return updated_keypoints, observation_history
 
 
+def load_first_keypoints(path):
+    with open(path, 'r') as positions:
+        dict_coordo = json.load(positions)
+    points = list(list(dict_coordo.values())[0].values())
+    key_points = [cv2.KeyPoint(x=p[0], y=p[1], size=15) for p in points]
+    return(key_points)
 
-def annotate_frames_with_particles(path, num_particles=5000, distance_threshold=30, model=None, use_current_estim=False):
+def annotate_frames_with_particles(path, num_particles=500, distance_threshold=30):
     """
     Annoter une séquence d'images avec les filtres de particules pour plusieurs marqueurs.
     
@@ -72,13 +66,25 @@ def annotate_frames_with_particles(path, num_particles=5000, distance_threshold=
 
     images_path = os.path.join(path, 'Preprocessed/')
     annotated_frame_path = os.path.join(path, 'annotated_frames/')
-    landmark_path = os.path.join(path, 'landmarks/')
-    os.makedirs(annotated_frame_path, exist_ok=True)
-    os.makedirs(landmark_path, exist_ok=True)
+    keypoints_path = os.path.join(path, 'Positions/')
     all_key_points = []
     particle_filters = []
     cur_key_points = []
     frame_with_key_points = None  # Initialisation par défaut
+
+    segmodel = load_model()
+    pf_params  = {
+                    'num_particles': num_particles,
+                    'move_std': 5,
+                    'img_shape': (704, 608), # changes when reading first image
+                    'weights_tuple': (1,1,0,0,0.5), 
+                    # weights for (euclidian distance, 
+                    #              bhattacharyya distance, 
+                    #              avg itensity gap, 
+                    #              dssim, 
+                    #              euclidian distance when observation is last position)
+                    'history_length': 5
+                }
 
     for i, filename in tqdm(enumerate(sorted(os.listdir(images_path))),total = len(os.listdir(images_path))):
         preprocessed_frame = cv2.imread(os.path.join(images_path, filename), cv2.IMREAD_GRAYSCALE)
@@ -87,47 +93,38 @@ def annotate_frames_with_particles(path, num_particles=5000, distance_threshold=
             print(f"Failed to load image {filename}. Skipping.")
             continue
         
-        
-            # Détection des marqueurs
-        if use_current_estim:
-            landmark_file = os.path.join(landmark_path, f"landmarks_{i:04d}.txt")
-            with open(landmark_file, 'r') as f:
-                points = [list(map(float, line.strip().split())) for line in f]
-            key_points = [cv2.KeyPoint(x=p[0], y=p[1], size=10) for p in points]
-        else:
-            key_points = detect_markers(preprocessed_frame,used_model="Unet",model=model)
-        
         if i == 0:
             # Initialisation des filtres de particules avec les marqueurs détectés dans la première image
-            key_points
+            pf_params["img_shape"] = preprocessed_frame.shape
+            starting_keypoints_file = os.path.join(keypoints_path, f"positions_corrigees.json")
+            key_points = load_first_keypoints(starting_keypoints_file)
             if not key_points:
                 print("No markers detected in the first frame. Exiting.")
                 return
-            particle_filters = [ParticleFilter(num_particles, np.array(kp.pt), preprocessed_frame.shape) for kp in key_points]
+            particle_filters = [ParticleFilter(np.array(kp.pt), pf_params) for kp in key_points]
             cur_key_points = key_points
             observation_history = [[[kp.pt[0],kp.pt[1]]] for kp in cur_key_points]
-            frame_with_key_points = cv2.drawKeypoints(preprocessed_frame, cur_key_points, None, color=(0, 0, 255))
+            
         else:
+            key_points = apply_seg_model(segmodel,preprocessed_frame)
             # Mise à jour des positions basées sur le filtre de particules
-            cur_key_points, frame_with_key_points, observation_history = annotate_single_frame_with_particles(
-                preprocessed_frame, particle_filters ,key_points , observation_history, i, previous_frame,distance_threshold=distance_threshold
+            cur_key_points, observation_history = annotate_single_frame_with_particles(
+                                        preprocessed_frame, 
+                                        particle_filters ,
+                                        key_points , 
+                                        observation_history, 
+                                        i, 
+                                        previous_frame, 
+                                        distance_threshold=distance_threshold
             )
         previous_frame = preprocessed_frame.copy()
-        if frame_with_key_points is None:
-            print(f"No frame with key points generated for {filename}. Skipping save.")
-            continue
         
         all_key_points.append(cur_key_points)
         # Sauvegarder l'image annotée
+        frame_with_key_points = cv2.drawKeypoints(preprocessed_frame, cur_key_points, None, color=(0, 255, 0))
         annotated_file = f"annotated_frame_{i:04d}.jpg"
-        cv2.imwrite(os.path.join(annotated_frame_path, annotated_file), frame_with_key_points)
-
-        # Sauvegarder les positions estimées dans un fichier texte
-        landmarks_file = f"landmarks_{i:04d}.txt"
-        with open(os.path.join(landmark_path, landmarks_file), 'w') as file:
-            for particle_filter in particle_filters:
-                est_x, est_y = particle_filter.estimate()
-                file.write(f"{est_x:.2f} {est_y:.2f}\n")
+        if i != 0:
+            cv2.imwrite(os.path.join(annotated_frame_path, annotated_file), frame_with_key_points)
 
     return(all_key_points)
 
@@ -135,7 +132,7 @@ def annotate_frames_with_particles(path, num_particles=5000, distance_threshold=
 def annotate_video(save_path, video_path):
     global model
     cap = cv2.VideoCapture(video_path)
-
+    segmodel = load_model()
     i = 0
 
     while cap.isOpened():
@@ -147,7 +144,7 @@ def annotate_video(save_path, video_path):
         print(frame.shape)
         src_img = frame
         frame = preprocess(frame)
-        key_points = detect_markers(frame,model)
+        key_points = apply_seg_model(segmodel,frame)
         # print(key_points)
         im_with_key_points = cv2.drawKeypoints(frame, key_points, np.array([]), (0, 0, 255),
                                                cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
@@ -197,96 +194,6 @@ def preprocess(image, z_nobg, w1, w2, h1, h2):
     ret, threshold = cv2.threshold(255 - circles, 40, 255, cv2.THRESH_BINARY)
 
     return clahe_img, 255 - circles
-
-def get_kp(labels):
-    labeled_mask, num_labels = nd.label(labels)
-    key_points = []
-    for i in range(num_labels):
-        blob_mask = (labeled_mask == i+1).astype(np.uint8)
-        area = np.sum(blob_mask)
-
-        midpoint = nd.center_of_mass(blob_mask)
-
-        contours, _ = cv2.findContours(blob_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        perimeter = sum(cv2.arcLength(cnt, True) for cnt in contours)
-        circularity = (4 * np.pi * area) / (perimeter ** 2) if perimeter > 0 else 0
-
-        if (30 <= area <= 320 and circularity >= 0.8):
-            size = 2 * (area / np.pi) ** 0.5
-            key_points.append(cv2.KeyPoint(int(np.round(midpoint[1])), int(np.round(midpoint[0])), size))
-    return(key_points)
-
-def detect_markers(frame, used_model, model = None, params=None):
-    if used_model == "Blob":
-        if params is None:
-            params = cv2.SimpleBlobDetector_Params()
-
-            params.minThreshold = 10
-            params.maxThreshold = 255
-            #params.maxThreshold = 60
-            #params.thresholdStep = 20
-
-            # Filter by Area.
-            params.filterByArea = True
-            params.minArea = 50
-            params.maxArea = 320
-            #
-            # Filter by Circularity
-            params.filterByCircularity = True
-            params.minCircularity = 0.8
-            #
-            # # Filter by Convexity
-            # params.filterByConvexity = True
-            # params.minConvexity = 0.8
-            #
-            # # Filter by Inertia
-            #params.filterByInertia = True
-            #params.minInertiaRatio = 0.5
-
-            params.minDistBetweenBlobs = 30
-
-        detector = cv2.SimpleBlobDetector_create(params)
-        key_points = detector.detect(frame)
-        try:
-            key_points += detector.detect(255-frame) # invert intensity values to detect bright markers
-        except TypeError:
-            pass
-
-    elif used_model == "Unet":
-        if model is None:
-            raise(ValueError("No model used"))
-        # weights = "./Unet_blob_detector/blobdetector3.ckpt"
-        # unet_model = UnetModel("FPN", "resnet34", in_channels=1, out_classes=1)
-        # unet_model.load_state_dict(torch.load(weights))
-        # probably need some code to get the right image format
-        mod_frame = frame
-        og_height, og_width = frame.shape[:2]
-        mod_frame = cv2.resize(frame, (608, 704))
-        mod_frame = torch.Tensor(mod_frame)
-        if mod_frame.dim() == 2:
-            mod_frame = mod_frame.unsqueeze(2).repeat(1, 1, 3)
-        mod_frame = mod_frame.permute(2, 0, 1) / 255
-
-        with torch.no_grad():
-            model.eval()
-            logits = model(mod_frame)
-        pr_masks = logits.sigmoid().numpy().squeeze()
-        pr_masks = cv2.resize(pr_masks, (og_width, og_height)) > 0.2
-
-        key_points = get_kp(pr_masks)
-
-    return key_points
-
-def get_blob(px,px_list,blob=[]):
-    x,y = px
-    if blob == []:
-        px_list.remove(px)
-    blob.append(px)
-    for vpx in [[x-1,y],[x+1,y],[x,y+1],[x,y-1]]:
-        if vpx in px_list:
-            px_list.remove(vpx)
-            blob,px_list = get_blob(vpx,px_list,blob)
-    return(blob,px_list)
 
 if __name__ == '__main__':
 
