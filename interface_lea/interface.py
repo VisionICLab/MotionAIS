@@ -148,11 +148,8 @@ class MyApp(Widget):
                         labels = list(dict_value.keys()) 
 
                 if labels:
-                    nb_marqueurs = len(labels)
-                    self.ids.grid.size_hint = (.22, .04 + .02*nb_marqueurs) # taille du tableau variable selon le nombre de marqueurs
-                    self.ids.grid.rows = 1 + nb_marqueurs
-                    print(f'{nb_marqueurs} marqueurs utilisés')
-                    self.ids.nb_marqueurs.color = (1,1,1,1)
+                    nb_of_marqueurs = len(labels)
+                    self.change_grid_nb_marqueurs(nb_of_marqueurs)
 
                     labelize_extent = True
                     detection_eff = True
@@ -186,6 +183,7 @@ class MyApp(Widget):
         print(body_LR[0])
 
         left = int(body_LR[0])
+        print(left)
         right = int(body_LR[-1])
 
         global w1
@@ -219,13 +217,32 @@ class MyApp(Widget):
         print(timer_debut, timer_fin)
         print(f'Temps automatic crop : {timer_fin - timer_debut} ns')
 
+
+    def begin_labelization(self):
+        if self.ids.marq_nb_input.text == '':
+            try:
+                nb_of_marqueurs = len(dict_coordo[f"image{image_nb}"])
+                if nb_of_marqueurs == 0:
+                    warnings.warn("Impossible de commencer la labelization sans au moins un marqueur sur l'image")
+                    pass
+                else:
+                    self.change_grid_nb_marqueurs(nb_of_marqueurs)
+            except KeyError as e:
+                print(e)
+                pass
+
     # Fonction pour définir le nombre de marqueurs utilisés
     def nb_marqueurs_input(self):
+        nb_of_marqueurs = int(self.ids.marq_nb_input.text)
+        self.change_grid_nb_marqueurs(nb_of_marqueurs)
+    
+    def change_grid_nb_marqueurs(self,nb_of_marqueurs):
         global nb_marqueurs
-        nb_marqueurs = int(self.ids.marq_nb_input.text)
+        nb_marqueurs = nb_of_marqueurs
         self.ids.grid.size_hint = (.22, .04 + .02*nb_marqueurs) # taille du tableau variable selon le nombre de marqueurs
         self.ids.grid.rows = 1 + nb_marqueurs
         print(f'{nb_marqueurs} marqueurs utilisés')
+        self.ids.marq_nb_input.text = str(nb_marqueurs)
         self.ids.nb_marqueurs.color = (1,1,1,1)
 
     # Fonction pour sélectionner le numéro de l'image à afficher, actualise la position du curseur
@@ -343,7 +360,6 @@ class MyApp(Widget):
         for i,frame_key_points in enumerate(all_key_points):
             #marker_array[0][i] = [[point.pt[0], point.pt[1]] for point in points]
             dict_coordo.update({f'image{i+1}' : [[float(point.pt[0]), float(point.pt[1])] for point in frame_key_points]})
-            print(dict_coordo)
             
         detection_eff = True
 
@@ -400,9 +416,7 @@ class MyApp(Widget):
     # Fonction pour afficher les marqueurs sur l'image actuelle
     def show_marqueurs(self):
         # Affichage des marqueurs si bouton activé
-        print(detection_eff)
         if detection_eff == True:
-            print(dict_coordo[f'image{image_nb}'])
             for coordinates in dict_coordo[f'image{image_nb}']:
                 x = (coordinates[0]/im_dim[1])*(self.ids.image_show.width/self.width) + 0.025 # calcul des coordonnées sur l'écran à partir de celles sur l'image
                 y = 0.85 - (coordinates[1]/im_dim[0])*0.78
@@ -809,6 +823,10 @@ class MyApp(Widget):
             dict_coordo_xyz_labels[im].update({'T2': coordos_sorted_x[1]}) """
 
     def analyse(self):
+
+        self.ids.save_positions.state = 'down'
+        self.to_save()
+
         global dict_metriques
 
         timer_debut_analyse = time.process_time_ns()
