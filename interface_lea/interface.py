@@ -180,11 +180,8 @@ class MyApp(Widget):
         body_LR = np.argwhere(z_nobg[1250,:]) #identifie points n'appartenant pas au bg, donc au corps du patient
         body_HL = np.argwhere(z_nobg[:,600])
 
-        print(body_LR[0])
-
-        left = int(body_LR[0])
-        print(left)
-        right = int(body_LR[-1])
+        left = int(body_LR[0,0])
+        right = int(body_LR[-1,0])
 
         global w1
         global w2
@@ -195,17 +192,17 @@ class MyApp(Widget):
             print('BG')
             w1 = np.max(left-100, 0)
             w2 = right+50
-            h1 = int(body_HL[0])+100
+            h1 = int(body_HL[0,0])+100
         elif 'BD' in os.listdir(save_path_xyz)[0]:
             print('BD')
             w1 = left-50
             w2 = right+100
-            h1 = int(body_HL[0])+100
+            h1 = int(body_HL[0,0])+100
         else:
             print('other')
             w1 = np.max(left-50, 0)
             w2 = right+50
-            h1 = int(body_HL[0])-100
+            h1 = int(body_HL[0,0])-100
 
         h2 = h1+int(6/5*(w2-w1))+150
         print(w1, w2, h1, h2)
@@ -349,7 +346,7 @@ class MyApp(Widget):
         timer_debut_detection = time.process_time_ns()
         if not os.path.exists(os.path.join(path,"annotated_frames","annotated_frame_0000.jpg")):
             warnings.warn("La première frame doit être annotée manuellement et enregistrée")
-            pass
+            return
 
         global detection_eff
         if len(path) > 1:
@@ -470,6 +467,9 @@ class MyApp(Widget):
    
     # Fonction pour convertir la position touchée en coordonnées de marqueur, puis choisir l'action à exécuter (delete or add)
     def pos_marqueur(self, touch_pos):
+        if not path:
+            warnings.warn("Aucune image détectée, merci de selectionner un dossier pour commencer")
+            return
         if self.ids.labelize_manual.state == 'normal':
             m_pos = [0,0]
             # im_dim = (600, 500, 3) = (height, width, channels)
@@ -1310,6 +1310,9 @@ class MyApp(Widget):
                     writer.writerow(row)
             with open(save_pos+'/positions_xyzr.json', 'w') as positions:
                 json.dump(dict_coordo_xyz_labels_r, positions)
+        
+        if os.path.exists(os.path.join(path,"annotated_frames","annotated_frame_0000.jpg")):
+            self.ids.button_particle_filter.disabled = False
     
     # Crée un csv et y écrit les métriques et le score global pour chaque image
     def save_metriques(self):
