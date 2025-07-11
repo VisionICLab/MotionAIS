@@ -119,6 +119,13 @@
                 id: labelize_manual
                 text:"Activer la\nlabellisation manuelle"
                 on_press: root.press_color()
+                on_press: root.begin_labelization()
+            ToggleButton:
+                id: button_particle_filter
+                text: "Appliquer le \nFiltre a Particules"
+                disabled: False
+                on_press: root.press_color()
+                on_press: root.detect_marqueurs()
             ToggleButton:
                 id: button_verif_nb
                 text: "Vérifier le nombre\nde marqueurs"

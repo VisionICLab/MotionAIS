@@ -10,7 +10,7 @@ from kivy.lang import Builder
 from kivy.core.window import Window
 from kivy.graphics import Color, Line, Ellipse
 from kivy.uix.label import Label
-from kivy.garden.matplotlib.backend_kivyagg import FigureCanvasKivyAgg
+from kivy_garden.matplotlib.backend_kivyagg import FigureCanvasKivyAgg 
 
 import json
 import cv2
@@ -20,18 +20,18 @@ import time
 import copy
 import open3d as o3d
 import numpy as np
-from tensorflow import linalg
+import warnings
+from numpy import linalg
 import matplotlib.pyplot as plt
 from matplotlib import colormaps as cm
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from matplotlib.colors import ListedColormap
 from scipy.interpolate import splev, splrep
 from scipy.ndimage import gaussian_filter1d, median_filter
-#from open3d.pipelines.registration import registration_icp, TransformationEstimationPointToPoint
 
 
 import read_raw_file as RRF
-import marker_detection
+import marker_detection_with_particles
 
 
 class MyApp(Widget):
@@ -97,10 +97,14 @@ class MyApp(Widget):
             self.automatic_crop()
 
             # crée les images Preprocessed pour consultation
+            global im_dim
             if len(os.listdir(save_path_im)) == 0:
                 for filename_i, filename_xyz in zip(os.listdir(save_path), os.listdir(save_path_xyz)):
-                    frame_display, preprocessed_frame = marker_detection.preprocess(cv2.imread(os.path.join(save_path, filename_i)), self.remove_bg(np.load(os.path.join(save_path_xyz, filename_xyz))), w1, w2, h1, h2)
+                    frame_display, preprocessed_frame = marker_detection_with_particles.preprocess(cv2.imread(os.path.join(save_path, filename_i)), self.remove_bg(np.load(os.path.join(save_path_xyz, filename_xyz))), w1, w2, h1, h2)
                     cv2.imwrite(os.path.join(save_path_im, filename_i), preprocessed_frame)
+                im_dim = preprocessed_frame.shape
+            else:
+                im_dim = cv2.imread(os.path.join(save_path_im, os.listdir(save_path_im)[0])).shape
 
             # Trouve le nombre d'images, définit le max du slider et le texte /tot
             global images_total
@@ -112,14 +116,15 @@ class MyApp(Widget):
             # Initie les variables pour dictionnaire de coordonnées et flag analyse_eff (pour affichage x,y,z)
             global dict_coordo
             dict_coordo = {}
+            for image_id in range(len(os.listdir(save_path_im))):
+                dict_coordo[f"image{image_id+1}"] = []
             global dict_coordo_labels_manual
             dict_coordo_labels_manual = {}
 
             global nb_marqueurs
             nb_marqueurs = np.nan
             
-            # Lance la détection des marqueurs et affiche la 1re image
-            self.detect_marqueurs()
+            # affiche la 1re image
             self.show_image()
 
             timer_fin_im = time.process_time_ns()
@@ -128,6 +133,27 @@ class MyApp(Widget):
 
         except FileNotFoundError:
             self.ids.label_ready.text = "Le chemin entré est introuvable. Essayez à nouveau."
+
+        #Si mode ouvrir: récupérer les positions existantes
+        global labels
+        if self.ids.check_open.active:
+            pos_path = os.path.join(path,'Positions')
+            if os.path.exists(pos_path) and len(os.listdir(pos_path)) > 0:
+                with open(os.path.join(path,'Positions','positions_corrigees.json'), 'r') as positions:
+                    dict_coordo_labels_manual = json.load(positions)
+
+                for key, dict_value in dict_coordo_labels_manual.items():
+                    dict_coordo[key] = list(dict_value.values())
+                    if len(dict_value.keys()) > 0:
+                        labels = list(dict_value.keys()) 
+
+                if labels:
+                    nb_of_marqueurs = len(labels)
+                    self.change_grid_nb_marqueurs(nb_of_marqueurs)
+
+                    labelize_extent = True
+                    detection_eff = True
+        
 
     # Prend une image xyz et retourne z en binaire 
     def remove_bg(self, xyz):
@@ -154,7 +180,10 @@ class MyApp(Widget):
         body_LR = np.argwhere(z_nobg[1250,:]) #identifie points n'appartenant pas au bg, donc au corps du patient
         body_HL = np.argwhere(z_nobg[:,600])
 
+        print(body_LR[0])
+
         left = int(body_LR[0])
+        print(left)
         right = int(body_LR[-1])
 
         global w1
@@ -174,11 +203,11 @@ class MyApp(Widget):
             h1 = int(body_HL[0])+100
         else:
             print('other')
-            w1 = np.max(left-80, 0)
-            w2 = right+80
-            h1 = int(body_HL[0])+50
+            w1 = np.max(left-50, 0)
+            w2 = right+50
+            h1 = int(body_HL[0])-100
 
-        h2 = h1+int(6/5*(w2-w1))
+        h2 = h1+int(6/5*(w2-w1))+150
         print(w1, w2, h1, h2)
 
         self.ids.width.text = f'({w2-w1}, 0)'
@@ -188,13 +217,32 @@ class MyApp(Widget):
         print(timer_debut, timer_fin)
         print(f'Temps automatic crop : {timer_fin - timer_debut} ns')
 
+
+    def begin_labelization(self):
+        if self.ids.marq_nb_input.text == '':
+            try:
+                nb_of_marqueurs = len(dict_coordo[f"image{image_nb}"])
+                if nb_of_marqueurs == 0:
+                    warnings.warn("Impossible de commencer la labelization sans au moins un marqueur sur l'image")
+                    pass
+                else:
+                    self.change_grid_nb_marqueurs(nb_of_marqueurs)
+            except KeyError as e:
+                print(e)
+                pass
+
     # Fonction pour définir le nombre de marqueurs utilisés
     def nb_marqueurs_input(self):
+        nb_of_marqueurs = int(self.ids.marq_nb_input.text)
+        self.change_grid_nb_marqueurs(nb_of_marqueurs)
+    
+    def change_grid_nb_marqueurs(self,nb_of_marqueurs):
         global nb_marqueurs
-        nb_marqueurs = int(self.ids.marq_nb_input.text)
+        nb_marqueurs = nb_of_marqueurs
         self.ids.grid.size_hint = (.22, .04 + .02*nb_marqueurs) # taille du tableau variable selon le nombre de marqueurs
         self.ids.grid.rows = 1 + nb_marqueurs
         print(f'{nb_marqueurs} marqueurs utilisés')
+        self.ids.marq_nb_input.text = str(nb_marqueurs)
         self.ids.nb_marqueurs.color = (1,1,1,1)
 
     # Fonction pour sélectionner le numéro de l'image à afficher, actualise la position du curseur
@@ -222,9 +270,9 @@ class MyApp(Widget):
         self.ids.image_show.clear_widgets()
 
         if self.ids.button_profondeur.state == 'normal':
-            self.ids.image_show.source = os.path.join(save_path_im, os.listdir(save_path_im)[image_nb-1])
+            self.ids.image_show.source = os.path.join(save_path_im, sorted(os.listdir(save_path_im))[image_nb-1])
         if self.ids.button_profondeur.state == 'down':
-            self.ids.image_show.source = os.path.join(save_path_depth, os.listdir(save_path_depth)[image_nb-1])
+            self.ids.image_show.source = os.path.join(save_path_depth, sorted(os.listdir(save_path_depth))[image_nb-1])
 
         self.canvas.remove_group(u"circle") # efface les cercles verts des marqueurs
         self.ids.rep_continuity.text = ''
@@ -296,105 +344,74 @@ class MyApp(Widget):
         if self.ids.labelize_manual.state == 'normal':
             self.canvas.remove_group(u"label")
         
-    # Fonction pour détecter les marqueurs de toutes les images du répertoire
+    # Fonction pour détecter les marqueurs de toutes les images du répertoire de 
     def detect_marqueurs(self):
         timer_debut_detection = time.process_time_ns()
+        if not os.path.exists(os.path.join(path,"annotated_frames","annotated_frame_0000.jpg")):
+            warnings.warn("La première frame doit être annotée manuellement et enregistrée")
+            pass
+
         global detection_eff
-        
         if len(path) > 1:
-            os.makedirs(path+'/annotated_frames/', exist_ok=True)
-            # Détecte les marqueurs, crée images annotées et fichiers txt avec positions
-            if len(os.listdir(path+'/annotated_frames/')) == 0: #or self.ids.check_new.state == 'down':
-                marker_detection.annotate_frames(path)
-        
+            # Détecte les marqueurs
+            all_key_points = marker_detection_with_particles.annotate_frames_with_particles(path)
+
         global dict_coordo
-        dict_coordo = {}
-        i = 1
-        for filename in os.listdir(path+'/Preprocessed/'):
-            key_points = marker_detection.detect_markers(cv2.imread(os.path.join(path+'/Preprocessed/', filename)))
-            points = [key_points[j] for j in range(len(key_points))]
+        for i,frame_key_points in enumerate(all_key_points):
             #marker_array[0][i] = [[point.pt[0], point.pt[1]] for point in points]
-            dict_coordo.update({f'image{i}' : [[float(point.pt[0]), float(point.pt[1])] for point in points]})
-            i += 1
+            dict_coordo.update({f'image{i+1}' : [[float(point.pt[0]), float(point.pt[1])] for point in frame_key_points]})
             
         detection_eff = True
-
-        global im_dim
-        im_dim = cv2.imread(os.path.join(save_path_im, os.listdir(save_path_im)[0])).shape
 
         # Va chercher les positions corrigées enregistrées si mode Ouvrir
         if self.ids.check_open.state == 'down':
             #global analyse_eff
             #analyse_eff = 'Metriques' in os.listdir(path+'') #Analyse effectuée (et utilisable) si métriques enregistrées
+
+            global labelize_extent
+            labelize_extent = True
+
+            # if 'coordonnees_xyz.csv' in os.listdir(path+'/Positions/'):
+            # # Recrée le dictionnaire de coordonnées x,y,z
+            #     global dict_coordo_xyz_labels
+            #     dict_coordo_xyz_labels = {}
+            #     with open(path+'/Positions/coordonnees_xyz.csv', 'r') as csvfile:
+            #         reader = csv.reader(csvfile, delimiter=';')
+            #         j = 0
+            #         for row in reader: #skip headline
+            #             if j == 0:
+            #                 entete = row[1::3]
+            #                 labels_xyz = [e[:-2] for e in entete]
+            #                 print(labels_xyz)
+            #             elif j > 0:
+            #                 key = f'image{row[0]}'
+            #                 dict_coordo_xyz_labels.update({key: {}})
+            #                 row = [float(i) for i in row[1:]]
+            #                 i = 0
+            #                 for l in labels_xyz:
+            #                     dict_coordo_xyz_labels[key].update({l : [row[i], row[i+1], row[i+2]]})
+            #                     i += 3
+            #             j += 1
+
+            #     global coordo_xyz
+            #     coordo_xyz = True
+
+            # else:
+            #     self.coordo_xyz_marqueurs()
             
-            if 'Positions' in os.listdir(path):
-                # Recrée dictionnaire de positions avec labels
-                global dict_coordo_labels_manual
-                jsonfile = open(path+'/Positions/positions_corrigees.json')
-                dict_coordo_labels_manual = json.load(jsonfile)
-                for key, marqueurs in dict_coordo_labels_manual.items():
-                    dict_coordo.update({key:[]})
-                    for m in marqueurs.values():
-                        dict_coordo[key].append(m)
-
-                global labels
-                labels = dict_coordo_labels_manual['image1'].keys()
-
-                global nb_marqueurs
-                nb_marqueurs = len(dict_coordo_labels_manual['image1'])
-                self.ids.grid.size_hint = (.22, .04 + .02*nb_marqueurs)
-                self.ids.grid.rows = 1 + nb_marqueurs
-
-                detection_eff = True
-
-                self.ids.button_showmarks.state = 'down'
-                self.ids.button_verif_nb.state = 'down'
-
-                self.ids.button_graph_continuity.disabled = False
-                self.ids.button_graph_continuity.disabled = False
-
-                global labelize_extent
-                labelize_extent = True
-
-                if 'coordonnees_xyz.csv' in os.listdir(path+'/Positions/'):
-                # Recrée le dictionnaire de coordonnées x,y,z
-                    global dict_coordo_xyz_labels
-                    dict_coordo_xyz_labels = {}
-                    with open(path+'/Positions/coordonnees_xyz.csv', 'r') as csvfile:
-                        reader = csv.reader(csvfile, delimiter=';')
-                        j = 0
-                        for row in reader: #skip headline
-                            if j == 0:
-                                entete = row[1::3]
-                                labels_xyz = [e[:-2] for e in entete]
-                                print(labels_xyz)
-                            elif j > 0:
-                                key = f'image{row[0]}'
-                                dict_coordo_xyz_labels.update({key: {}})
-                                row = [float(i) for i in row[1:]]
-                                i = 0
-                                for l in labels_xyz:
-                                    dict_coordo_xyz_labels[key].update({l : [row[i], row[i+1], row[i+2]]})
-                                    i += 3
-                            j += 1
-
-                    global coordo_xyz
-                    coordo_xyz = True
-
-                else:
-                    self.coordo_xyz_marqueurs()
-                
-                self.ids.button_analyze.state = 'down'
-                self.analyse()
-                global analyse_eff
-                analyse_eff = True
-                
-                self.ids.button_analyze.state = 'down'
-                self.ids.button_analyze.disabled = False
+            # self.ids.button_analyze.state = 'down'
+            # self.analyse()
+            # global analyse_eff
+            # analyse_eff = True
+            
+            # self.ids.button_analyze.state = 'down'
+            # self.ids.button_analyze.disabled = False
 
         timer_fin_detection = time.process_time_ns()
         print(timer_debut_detection, timer_fin_detection)
         print(f'Temps détection des marqueurs :{timer_fin_detection - timer_debut_detection} ns')
+
+        self.extend_labelisation()
 
     # Fonction pour afficher les marqueurs sur l'image actuelle
     def show_marqueurs(self):
@@ -492,8 +509,11 @@ class MyApp(Widget):
 
         if labelize_extent == True:
             self.extend_labelisation()
+
+        global detection_eff
+        detection_eff = True
         self.show_image()
-    
+        
     # Supprime les marqueurs qui n'ont pas été identifiés dans la prolongation de la labellisation manuelle
     def delete_by_continuity(self):
         for im in dict_coordo.keys():
@@ -501,11 +521,21 @@ class MyApp(Widget):
                 if c not in dict_coordo_labels_manual[im].values():
                     dict_coordo[im].remove(c)
         self.show_image()
+    
+    def validate_labels(self):
+        for im in dict_coordo.keys():
+            if im not in dict_coordo_labels_manual:
+                dict_coordo_labels_manual[im] = {}
+        
+            for label in labels:  # Vérifie tous les labels attendus
+                if label not in dict_coordo_labels_manual[im]:
+                    dict_coordo_labels_manual[im][label] = [np.nan, np.nan]
 
     # Ajoute des marqueurs manquants selon les splines d'interpolation
     def add_by_continuity(self):
         im_prob_nb = self.verif_nb()
         splines_smooth = self.interpolate_spline()
+        self.validate_labels()
         for im in im_prob_nb:
             for l in labels:
                 c = dict_coordo_labels_manual[f'image{im}'][l]
@@ -598,7 +628,7 @@ class MyApp(Widget):
         ax1.set_ylabel("Coordonnée en x", fontsize=9)
         ax2.set_ylabel("Coordonnée en y", fontsize=9)
         ax2.set_xlabel("Numéro de l'image", fontsize=9)
-        #plt.savefig(r'C:\Users\LEA\Desktop\Poly\H2023\Projet 3\graph_continuity_1.png')
+
         self.ids.graph.add_widget(FigureCanvasKivyAgg(plt.gcf()))
         plt.close()
 
@@ -632,6 +662,19 @@ class MyApp(Widget):
         else:
             pass
     
+    def modify_label(self, label,pos):
+        for i,widget in enumerate(self.ids.grid.children):
+            if ''.join(list(widget.text)) == label:
+                self.ids.grid.children[i-1].text = f'({pos[0]:.0f}, {pos[1]:.0f})'
+                return 
+        
+        raise ValueError(f"No label with name {label} found")
+    
+    def add_label(self,label,pos):
+        self.ids.grid.add_widget(Label(text=f'{label}', color=(0,0,0,1)))
+        self.ids.grid.add_widget(Label(text=f'({pos[0]:.0f}, {pos[1]:.0f})', color=(0,0,0,1)))
+
+
     # Entre le label du marqueur sélectionne dans le tableau et dans le dictionnaire, extend labelisation si tous les marqueurs labellisés
     def label_in(self, button):
         id = button.custom_value
@@ -641,17 +684,24 @@ class MyApp(Widget):
 
         if m_to_label != [np.nan, np.nan]:
             global dict_coordo_labels_manual
+            update = False
             if f'image{image_nb}' in dict_coordo_labels_manual.keys():
-                if label not in dict_coordo_labels_manual[f'image{image_nb}'] and m_to_label not in dict_coordo_labels_manual[f'image{image_nb}'].values():
+                if label not in dict_coordo_labels_manual[f'image{image_nb}']:
+                    for key,value in dict_coordo_labels_manual[f'image{image_nb}'].items():
+                        if m_to_label == value:
+                            warnings.warn(f"Position touchée ({m_to_label}) déjà utilisée pour le label {key}")
                     dict_coordo_labels_manual[f'image{image_nb}'].update({label : m_to_label})
                 else:
                     dict_coordo_labels_manual[f'image{image_nb}'][label] = m_to_label
+                    update = True
             else:
                 dict_coordo_labels_manual.update({f'image{image_nb}': {label : m_to_label}})
 
             if not labelize_extent:
-                self.ids.grid.add_widget(Label(text=f'{label}', color=(0,0,0,1)))
-                self.ids.grid.add_widget(Label(text=f'({m_to_label[0]:.0f}, {m_to_label[1]:.0f})', color=(0,0,0,1)))
+                if update:
+                    self.modify_label(label,m_to_label)
+                else:
+                    self.add_label(label,m_to_label)
             if labelize_extent:
                 self.show_image()
             
@@ -734,9 +784,6 @@ class MyApp(Widget):
         os.makedirs(save_xyz, exist_ok=True)
         # Lis les xyz.raw et crée les fichiers contenant les x,y,z des marqueurs
 
-        for key in dict_coordo_labels_manual.keys():
-            dict_coordo[key] = list(dict_coordo_labels_manual[key].values())
-
         RRF.write_xyz_coordinates(path, dict_coordo_labels_manual, w1, w2, h1, h2)
         # Récupère les données des fichiers csv des coordonnées x,y,z des marqueurs
         for filename in os.listdir(save_xyz):
@@ -776,6 +823,10 @@ class MyApp(Widget):
             dict_coordo_xyz_labels[im].update({'T2': coordos_sorted_x[1]}) """
 
     def analyse(self):
+
+        self.ids.save_positions.state = 'down'
+        self.to_save()
+
         global dict_metriques
 
         timer_debut_analyse = time.process_time_ns()
@@ -791,7 +842,9 @@ class MyApp(Widget):
             if self.ids.button_analyze.state == 'down':
                 self.coordo_xyz_marqueurs()
 
-                dict_metriques = {'angle_scap_vert' : [], 'angle_scap_prof': [], 'diff_dg': []}
+                dict_metriques = {'angle_scap_vert' : [], 'angle_scap_prof': [], 'diff_dg': []
+                                #   , 'bsr': []
+                                }
 
                 for im, coordo in dict_coordo_xyz_labels_r.items():
                     scap_y = np.degrees(np.arctan((coordo['ScD'][1] - coordo['ScG'][1])/(coordo['ScD'][0] - coordo['ScG'][0])))
@@ -1100,105 +1153,6 @@ class MyApp(Widget):
     def erase_distances(self):
         self.remove_widget(self.Distances)
         self.canvas.remove_group(u"circle_gold")
-
-
-# ICP registration to align and show manual corrections markers's positions on actual image
-    """ def ICP_registration(self, source, target):
-        pc_target = o3d.geometry.PointCloud()
-        pc_target.points = o3d.utility.Vector3dVector(target)
-        pc_source = o3d.geometry.PointCloud()
-        pc_source.points = o3d.utility.Vector3dVector(source)
-
-        trans_init = np.eye(4)
-        reg_p2p = registration_icp(pc_source, pc_target, 400, trans_init, TransformationEstimationPointToPoint())
-        pc_source_t = pc_source.transform(reg_p2p.transformation)
-        source_trans = np.asarray(pc_source_t.points)
-
-        RMSE = reg_p2p.inlier_rmse
-
-        return source_trans, RMSE
-
-    def correction_gold(self):
-        path_pt = path[:(path.find('Participant')+14)]
-        correction_paths = ['Corrected/Prise01/Positions/positions_xyzr.json', 'Corrected/Prise02/Positions/positions_xyzr.json',
-                            'Maximum/Prise01/Positions/positions_xyzr.json', 'Maximum/Prise02/Positions/positions_xyzr.json',
-                            'Minimum/Prise01/Positions/positions_xyzr.json', 'Minimum/Prise02/Positions/positions_xyzr.json']
-
-        global arrays_corr
-        arrays_corr = {}
-
-        for key in dict_coordo_xyz_labels_r:
-            arrays_corr.update({key : {}})
-            for correction_path in correction_paths:
-                try:
-                    file_corr = open(os.path.join(path_pt, correction_path))
-                    dict_corr = json.load(file_corr)
-                    array_corr = np.asarray([[c_corr[0], c_corr[1], c_corr[2]] for c_corr in list(dict_corr.values())[len(dict_corr.values())//2].values()]) # sélection du frame central de la séquence
-                    array_auto = np.asarray([[c_corr[0], c_corr[1], c_corr[2]] for c_corr in list(dict_coordo_xyz_labels_r[key].values())]) # sélection du frame central de la séquence
-                    
-                    a = sorted(array_auto, key=lambda tup: tup[0])[0]
-                    b = sorted(array_corr, key=lambda tup: tup[0])[0]
-                    dist = np.subtract(a, b)
-                    array_corr = array_corr + dist
-
-                    array_corr_t, RMSE = self.ICP_registration(array_corr, array_auto)
-
-                    pelvis_auto = sorted(array_auto, key=lambda el: el[1])[:2]
-                    pelvis_corr_t = sorted(array_corr_t, key=lambda el: el[1])[:2]
-
-                    IG_auto = sorted(pelvis_auto, key=lambda el: el[0])[0]
-                    ID_auto = sorted(pelvis_auto, key=lambda el: el[0])[1]
-                    IG_corr = sorted(pelvis_corr_t, key=lambda el: el[0])[0]
-                    ID_corr = sorted(pelvis_corr_t, key=lambda el: el[0])[1]
-                    dist = (np.subtract(IG_auto, IG_corr) + np.subtract(ID_auto, ID_corr)) /2.0
-                    array_corr_t = array_corr_t + dist
-
-                    i = correction_path.find('/')
-                    arrays_corr[key].update({f'{correction_path[:i]} {correction_path[i+7:i+8]}': [array_corr_t, RMSE]})
-
-                except FileNotFoundError:
-                    continue
-        
-    # Affiche les positions souhaitées des marqueurs selon un type de correction manuelle (Droite, Minimale, Maximale)
-    def show_correction_gold(self):
-        try:
-            array_corr_t = arrays_corr[f'image{image_nb}']
-        except NameError:
-            self.correction_gold()
-            array_corr_t = arrays_corr[f'image{image_nb}']
-
-        if self.ids.button_correction.state == 'down':
-            correction_paths = []
-            if self.ids.check_corrected.state == 'down':
-                correction_paths += ['Corrected/Prise01/Positions/positions_xyzr.json', 'Corrected/Prise02/Positions/positions_xyzr.json']
-            if self.ids.check_max.state == 'down':
-                correction_paths += ['Maximum/Prise01/Positions/positions_xyzr.json', 'Maximum/Prise02/Positions/positions_xyzr.json']
-            if self.ids.check_min.state == 'down':
-                correction_paths += ['Minimum/Prise01/Positions/positions_xyzr.json', 'Minimum/Prise02/Positions/positions_xyzr.json']
-
-            for correction_path in correction_paths:
-                i = correction_path.find('/')
-                type_corr = f'{correction_path[:i]} {correction_path[i+7:i+8]}'
-                plt.scatter(array_corr_t[type_corr][0][:,0], array_corr_t[type_corr][0][:,1], label = f'{type_corr} : RMSE = {array_corr_t[type_corr][1]:.4f}')
-                    
-            array_auto = np.asarray([[c_corr[0], c_corr[1], c_corr[2]] for c_corr in list(dict_coordo_xyz_labels_r[f'image{image_nb}'].values())]) # sélection du frame central de la séquence
-            
-            plt.scatter(array_auto[:,0], array_auto[:,1], label='Autocorrection')
-            plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
-            plt.title('Positions actuelles et visées des marqueurs')
-            plt.xlabel('Coordonnée en x')
-            plt.ylabel('Coordonnée en y')
-            plt.gca().set_aspect("equal")
-            plt.tight_layout()
-            self.ids.graph.size_hint = (.4, .73)
-            self.ids.graph.pos_hint = {'x':.53, 'top':.73}
-            self.ids.graph.add_widget(FigureCanvasKivyAgg(plt.gcf()))
-            plt.close()
-
-        else:
-            self.ids.graph.clear_widgets()
-            self.ids.graph.size_hint = (.47, .6)
-            self.ids.graph.pos_hint = {'x':.53, 'top':.6}  """
     
     def rotate_markers(self):
         dict_coordo_xyz_rotated = {}
@@ -1297,7 +1251,9 @@ class MyApp(Widget):
             if not 'landmarks' in os.listdir(path):
                 os.mkdir(path+'/landmarks', )
             if not 'Positions' in os.listdir(path):
-                os.mkdir(path+'\\Positions', )
+                os.mkdir(path+'/Positions', )
+            if not 'annotated_frames' in os.listdir(path):
+                os.mkdir(path+'/annotated_frames', )
             self.save_positions()
             
         if analyse_eff == True:
@@ -1323,7 +1279,23 @@ class MyApp(Widget):
         print('writing to ' + save_pos+'/positions_corrigees.json')
         with open(save_pos+'/positions_corrigees.json', 'w') as positions:
             json.dump(dict_coordo_labels_manual, positions)
-    
+
+        #ne sauvegarde que les imqges posseddant le bon nombre de marqueurs
+        print("Ecriture des images annotées")
+        nb_saved_annotated = 0
+        annotated_frames_path = path + '/annotated_frames'
+        for i, (filename,coordo_list) in enumerate(zip(os.listdir(save_path_im),dict_coordo.values())):
+            if len(coordo_list) == nb_marqueurs:
+                nb_saved_annotated += 1 
+                #Save annotated image
+
+                preprocessed_frame = cv2.imread(os.path.join(save_path_im, filename), cv2.IMREAD_GRAYSCALE)
+                key_points = [cv2.KeyPoint(int(np.round(midpoint[0])), int(np.round(midpoint[1])), 15) for midpoint in coordo_list]
+                annotated_file = f"annotated_frame_{i:04d}.jpg"
+                frame_with_key_points = cv2.drawKeypoints(preprocessed_frame, key_points, None, color=(0, 255, 0))
+                cv2.imwrite(os.path.join(annotated_frames_path, annotated_file), frame_with_key_points)
+
+
         if coordo_xyz:
             with open(save_pos+'/coordonnees_xyz_r.csv', 'w', newline='') as csvfile:
                 writer = csv.writer(csvfile, delimiter=';')
