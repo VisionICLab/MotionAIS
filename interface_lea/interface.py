@@ -99,7 +99,7 @@ class MyApp(Widget):
             # crée les images Preprocessed pour consultation
             global im_dim
             if len(os.listdir(save_path_im)) == 0:
-                for filename_i, filename_xyz in zip(os.listdir(save_path), os.listdir(save_path_xyz)):
+                for filename_i, filename_xyz in zip(sorted(os.listdir(save_path)), sorted(os.listdir(save_path_xyz))):
                     frame_display, preprocessed_frame = marker_detection_with_particles.preprocess(cv2.imread(os.path.join(save_path, filename_i)), self.remove_bg(np.load(os.path.join(save_path_xyz, filename_xyz))), w1, w2, h1, h2)
                     cv2.imwrite(os.path.join(save_path_im, filename_i), preprocessed_frame)
                 im_dim = preprocessed_frame.shape
@@ -175,10 +175,11 @@ class MyApp(Widget):
     def automatic_crop(self):
         timer_debut = time.process_time_ns()
 
-        xyz = np.load(os.path.join(save_path_xyz, os.listdir(save_path_xyz)[0]))
+        xyz = np.load(os.path.join(save_path_xyz, sorted(os.listdir(save_path_xyz))[0]))
         z_nobg = self.remove_bg(xyz)
         body_LR = np.argwhere(z_nobg[1250,:]) #identifie points n'appartenant pas au bg, donc au corps du patient
         body_HL = np.argwhere(z_nobg[:,600])
+        print(body_HL)
 
         left = int(body_LR[0,0])
         right = int(body_LR[-1,0])
@@ -216,7 +217,7 @@ class MyApp(Widget):
 
 
     def begin_labelization(self):
-        if self.ids.marq_nb_input.text == '':
+        if self.ids.marq_nb_input.text == '' or image_nb == 1:
             try:
                 nb_of_marqueurs = len(dict_coordo[f"image{image_nb}"])
                 if nb_of_marqueurs == 0:
@@ -786,7 +787,7 @@ class MyApp(Widget):
 
         RRF.write_xyz_coordinates(path, dict_coordo_labels_manual, w1, w2, h1, h2)
         # Récupère les données des fichiers csv des coordonnées x,y,z des marqueurs
-        for filename in os.listdir(save_xyz):
+        for filename in sorted(os.listdir(save_xyz)):
             index_XYZ = filename.find('_XYZ') + 5
             key = f'image{int(filename[index_XYZ:-4])+1}'
             with open(os.path.join(save_xyz, filename), newline='') as csvfile:
@@ -1212,7 +1213,7 @@ class MyApp(Widget):
 
     def show_profondeur(self):
         if len(os.listdir(save_path_depth)) == 0 or self.ids.check_new.state == 'down':
-            for file in os.listdir(save_path_xyz):
+            for file in sorted(os.listdir(save_path_xyz)):
                 xyz = np.load(os.path.join(save_path_xyz, file))
                 xyz_r = linalg.matmul(xyz, matrix_R)
                 xyz_r = np.asarray(xyz_r)
@@ -1240,7 +1241,7 @@ class MyApp(Widget):
                 plt.close()
 
         if self.ids.button_profondeur.state == 'down':
-            self.ids.image_show.source = os.path.join(save_path_depth, os.listdir(save_path_depth)[image_nb-1])
+            self.ids.image_show.source = os.path.join(save_path_depth, sorted(os.listdir(save_path_depth))[image_nb-1])
 
 
     # Sauvegarder les informations souhaitées selon ce qui est coché
@@ -1284,7 +1285,7 @@ class MyApp(Widget):
         print("Ecriture des images annotées")
         nb_saved_annotated = 0
         annotated_frames_path = path + '/annotated_frames'
-        for i, (filename,coordo_list) in enumerate(zip(os.listdir(save_path_im),dict_coordo.values())):
+        for i, (filename,coordo_list) in enumerate(zip(sorted(os.listdir(save_path_im)),dict_coordo.values())):
             if len(coordo_list) == nb_marqueurs:
                 nb_saved_annotated += 1 
                 #Save annotated image
