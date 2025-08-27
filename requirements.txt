@@ -1,0 +1,7 @@
+--extra-index-url https://kivy-garden.github.io/simple/
+Kivy
+kivy_garden.matplotlib
+open3d
+opencv-python
+scikit-image
+segmentation_models_pytorch

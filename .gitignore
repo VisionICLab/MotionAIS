@@ -4,6 +4,7 @@
 /__pycache__
 /flownet_experiments
 /PointNet2/.idea
+/.venv
 
 /interface_lea/__pycache__
 /PointNet2/Pointnet_Pointnet2_pytorch/runs
